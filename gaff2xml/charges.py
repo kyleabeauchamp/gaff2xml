@@ -1,20 +1,65 @@
 from utils import import_
 
+# Note: We recommend having every function return *copies* of input, to avoid headaches associated with in-place changes
+
+def get_charges(molecule, max_confs=200):
+    """Generate charges for an OpenEye OEMol molecule.
+
+    Parameters
+    ----------
+    molecule : OEMol
+        Molecule for which to generate conformers.  If molecule.NumConfs() <= 1
+        and max_confs > 1, then Omega will be used to generate max_confs
+        conformations.  
+    max_confs : int
+        Max number of conformers to generate
+    
+    Returns
+    -------
+    charged_copy : OEMol
+        A molecule with OpenEye's recommended AM1BCC charge selection scheme.
+
+    Notes
+    -----
+    See http://docs.eyesopen.com/toolkits/quacpac/java/molchargetheory.html
+    for details.
+    """
+    oechem = import_("openeye.oechem")
+    if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for OEChem!"))
+    oequacpac = import_("openeye.oequacpac")
+    if not oequacpac.OEQuacPacIsLicensed(): raise(ImportError("Need License for oequacpac!"))
+    
+    molecule = normalize_molecule(molecule)
+    
+    if molecule.NumConfs() <= 1 and max_confs > 1:
+        charged_copy = generate_conformers(molecule, max_confs=max_confs)  # Generate up to max_confs conformers
+    else:
+        charged_copy = molecule  # Just charge the input molecule
+    
+    oequacpac.OEAssignPartialCharges(charged_copy, oequacpac.OECharges_AM1BCCSymSPt)  # AM1BCCSymSPt recommended by Chris Bayly to KAB, Oct. 15 2014.
+
+    return charged_copy
+
+
 def normalize_molecule(molecule):
     """Normalize a copy of the molecule by checking aromaticity, adding explicit hydrogens, and renaming by IUPAC name.
 
-    ARGUMENTS
-    molecule (OEMol) - the molecule to be normalized.
+    Parameters
+    ----------
+    molecule : OEMol
+        the molecule to be normalized.
+    
+    Returns
+    -------
+    molcopy : OEMol
+        A (copied) version of the normalized molecule
 
-    EXAMPLES
-    # read a partial molecule and normalize it
-    molecule = readMolecule('molecule.sdf')
-    normalizeMolecule(molecule)
     """
     oechem = import_("openeye.oechem")
     if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for OEChem!"))   
     oeiupac = import_("openeye.oeiupac")
     if not oeiupac.OEIUPACIsLicensed(): raise(ImportError("Need License for OEOmega!"))    
+
     molcopy = oechem.OEMol(molecule)
    
     # Assign aromaticity.
@@ -26,7 +71,11 @@ def normalize_molecule(molecule):
     # Set title to IUPAC name.
     name = oeiupac.OECreateIUPACName(molcopy)
     molcopy.SetTitle(name)
-
+    
+    # Check for any missing atom names, if found reassign all of them.
+    if any([atom.GetName() == '' for atom in molcopy.GetAtoms()]):
+        oechem.OETriposAtomNames(molcopy)
+    
     return molcopy
 
 
@@ -38,9 +87,15 @@ def iupac_to_oemol(iupac_name):
     iupac_name : str
         IUPAC name of desired molecule.
 
+    Returns
+    -------
+    molecule : OEMol
+        A normalized molecule with desired iupac name
+
     Examples
     --------
     >>> molecule = iupac_to_oemol("trans-2-fluoro-3-methylpent-2-ene")
+
     """
     oechem = import_("openeye.oechem")
     if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for OEChem!"))
@@ -54,7 +109,7 @@ def iupac_to_oemol(iupac_name):
     if not oeiupac.OEParseIUPACName(molecule, iupac_name):
         raise ValueError("The supplied IUPAC name '%s' could not be parsed." % iupac_name)
 
-    normalize_molecule(molecule)
+    molecule = normalize_molecule(molecule)
 
     return molecule
 
@@ -65,6 +120,12 @@ def smiles_to_oemol(smiles):
     ----------
     smiles : str
         SMILES representation of desired molecule.
+
+    Returns
+    -------
+    molecule : OEMol
+        A normalized molecule with desired smiles string.
+    
     Examples
     --------
     >>> molecule = smiles_to_oemol("c1ccncc1")
@@ -80,17 +141,22 @@ def smiles_to_oemol(smiles):
 
     return molecule
 
-def generate_conformers(molecule, max_conformers, strictStereo=True):
+def generate_conformers(molecule, max_confs=100, strictStereo=True):
     """Generate conformations for the supplied molecule
 
     Parameters
     ----------
     molecule : OEMol
         Molecule for which to generate conformers
-    max_conformers : int
+    max_confs : int
         Max number of conformers to generate
     strictStereo : bool, optional, default=True
         Adhere to strict specification of stereo isomer
+
+    Returns
+    -------
+    molcopy : OEMol
+        A multi-conformer molecule with up to max_confs conformers.
 
     Examples
     --------
@@ -101,168 +167,43 @@ def generate_conformers(molecule, max_conformers, strictStereo=True):
     if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for OEChem!"))
     oeomega = import_("openeye.oeomega")
     if not oeomega.OEOmegaIsLicensed(): raise(ImportError("Need License for OEOmega!"))
+
     molcopy = oechem.OEMol(molecule)
     omega = oeomega.OEOmega()
     omega.SetStrictStereo(strictStereo)
-
-    #if strictTyping != None:
-    #    omega.SetStrictAtomTypes(strictTyping)
    
     omega.SetIncludeInput(False)  # don't include input
-    omega.SetMaxConfs(max_conformers)
+    omega.SetMaxConfs(max_confs)
     omega(molcopy)  # generate conformation
 
     return molcopy
 
 
-def generate_am1bcc_charges(molecule):
-    """Use OEQuacPac to generate am1bcc charges for a molecule."""
-    oechem = import_("openeye.oechem")
-    if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for OEChem!"))
-    oequacpac = import_("openeye.oequacpac")
-    if not oequacpac.OEQuacPacIsLicensed(): raise(ImportError("Need License for oequacpac!"))
-
-    charged_copy = oechem.OEMol(molecule)
-    oequacpac.OEAssignPartialCharges(charged_copy, oequacpac.OECharges_AM1BCC)
-    return charged_copy
-
-
-def generate_conformer_charges_am1bcc(molecule_w_conformers):
-    """Generate charges for each conformer in a given molecule
-
-    Parameters
-    ----------
-    molecule_w_conformers: OEMol
-        A molecule with several 3D conformers
-
-    Examples
-    --------
-    >>> molecule = iupac_to_oemol("trans-2-fluoro-3-methylpent-2-ene")
-    >>> molecule_w_conformers = generate_conformers(molecule, 5, strictStereo=True)
-    >>> charged_conformers = generate_conformer_charges_am1bcc(molecule_w_conformers)
-    """
-    oechem = import_("openeye.oechem")
-    if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for OEChem!"))
-
-    molcopy = oechem.OEMol(molecule_w_conformers)
-    charged_conformers = list()
-    for conformer_index, conformation in enumerate(molcopy.GetConfs()):
-        charged_molecule = generate_am1bcc_charges(conformation)
-        charged_conformers.append(charged_molecule)
-
-    return charged_conformers
-
-
-def get_oeszybki_minimizer(use_charges=True):
-    """Set up a minimizer with OESzybki"""
-    oeszybki = import_("openeye.oeszybki")
-    if not oeszybki.OESzybkiIsLicensed(): raise(ImportError("Need License for oeszybki!"))
-
-    szybki = oeszybki.OESzybki()
-
-    szybki.SetRunType(oeszybki.OERunType_CartesiansOpt)  # Set the runtype to minimizer
-
-    if use_charges:
-        szybki.SetUseCurrentCharges(True)  # use partial charges for minimization
-    else:
-        szybki.SetUseCurrentCharges(False) # use mmff94 charges for minimization
-
-    return szybki
-
-
-def minimize_conformers(conformer_list, use_charges=True):
-    """Minimize the conformations in a list of conformers.
-
-    Parameters
-    ----------
-    conformer_list: list of OEMol
-        A list of conformers that need to be minimized
-    use_charges: bool, optional, default=True
-        Use the molecules current charges for minimization
-
-    Examples
-    --------
-    >>> molecule = iupac_to_oemol("trans-2-fluoro-3-methylpent-2-ene")
-    >>> molecule_w_conformers = generate_conformers(molecule, 5, strictStereo=True)
-    >>> charged_conformers = generate_conformer_charges_am1bcc(molecule_w_conformers)
-    >>> minimized_conformers = minimize_conformers(charged_conformers, use_charges=True)
-    """
-    oechem = import_("openeye.oechem")
-    if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for oechem!"))
-
-    szybki = get_oeszybki_minimizer(use_charges)
-
-    minimized_conformers = list()
-    conformer_energies = list()
-    for conformer in conformer_list:
-        conformer_copy = oechem.OEMol(conformer)
-        szybki_result = szybki(conformer_copy)
-        minimized_conformers.append(conformer_copy)
-        lastresult = None
-        for lastresult in szybki_result:
-            pass
-        conformer_energies.append(lastresult.GetTotalEnergy()) # Unit is kcal / mol ?
-    return minimized_conformers, conformer_energies
-
-def absolute_charges(molecule):
-    """Set partial charges to the absolute value."""
-    oechem = import_("openeye.oechem")
-    if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for oechem!"))
-    molcopy = oechem.OEMol(molecule)
-
-    for atom in molcopy.GetAtoms():
-            atom.SetPartialCharge(abs(atom.GetPartialCharge()))
-
-    return molcopy
-
-def generate_extended_conformers(molecule, max_conformers, strictStereo=True):
-    """Generate extended conformations for the supplied molecule using conformers minimized by absolute charges.
+def get_names_to_charges(molecule):
+    """Return a dictionary of atom names and partial charges, as well as a string representation.
 
     Parameters
     ----------
     molecule : OEMol
-        Molecule for which to generate conformers
-    max_conformers : int
-        Max number of conformers to generate
-    strictStereo : bool, optional, default=True
-        Adhere to strict specification of stereo isomer
+        Molecule for which to grab charges
 
-    Examples
-    --------
-    >>> molecule = iupac_to_oemol("7-azaniumylheptanoate")
-    >>> extended_conformers = generate_extended_conformers(molecule, 50, strictStereo=True)
-    >>> z = zip(*extended_conformers)
-    >>> for p in z: print p[1]- p[2] # debug change in energy after minimization with abs charge
+    Returns
+    -------
+    data : dictionary
+        A dictinoary whose (key, val) pairs are the atom names and partial
+        charges, respectively.
+    molrepr : str
+        A string representation of data
     """
+    
     oechem = import_("openeye.oechem")
     if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for oechem!"))
-
     molcopy = oechem.OEMol(molecule)
-
-    molecule_w_conformers = generate_conformers(molcopy, max_conformers, strictStereo)
-    charged_conformers = generate_conformer_charges_am1bcc(molecule_w_conformers)
-    minimized_charged_conformers, min_energies = minimize_conformers(charged_conformers, use_charges=True)
-
-    absolute_charged_conformers = list()
-    print get_mol_atoms_type_charge(minimized_charged_conformers[0])  # debug
-    for charged_conf in minimized_charged_conformers:
-        absolute_charged_conformers.append(absolute_charges(charged_conf))
-
-    print get_mol_atoms_type_charge(absolute_charged_conformers[0]) #debug
-    extended_conformers, ext_energies = minimize_conformers(absolute_charged_conformers, use_charges=True)
-
-    return extended_conformers, ext_energies, min_energies
-
-def get_mol_atoms_type_charge(oemol):
-    """
-    Print type and partial charge for every atom in OEMol
-    """
-    oechem = import_("openeye.oechem")
-    if not oechem.OEChemIsLicensed(): raise(ImportError("Need License for oechem!"))
-    molcopy = oechem.OEMol(oemol)
-    molrepr = str()
-    for at in molcopy.GetAtoms():
-        tp = at.GetType()
-        pc = at.GetPartialCharge()
-        molrepr += "%s %f \n" % (tp,pc)
-    return molrepr
+    molrepr = ""
+    data = {}
+    for atom in molcopy.GetAtoms():
+        name = atom.GetName()
+        charge = atom.GetPartialCharge()
+        data[name] = charge
+        molrepr += "%s %f \n" % (name, charge)
+    return data, molrepr
